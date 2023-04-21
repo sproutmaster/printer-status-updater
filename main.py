@@ -1,35 +1,65 @@
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
+import pymongo.errors
+from urllib.error import URLError
+from urllib.parse import urlparse
+import urllib.request
 from dotenv import load_dotenv
 from sys import exit
 from os import getenv
 import aiohttp
 import asyncio
 import redis
+import json
 
 load_dotenv()
 
 
 async def get_status(session, url):
-    async with session.get(url) as resp:
-        res = await resp.json()
-        return res['response']
+    """
+    If printer is online,
+    :param session: session
+    :param url: query url
+    :return: None
+    """
+    async with session.get(url, timeout=7000) as resp:
+        res = json.loads(await resp.text())
+        cache_out = {'response': res['response']['message']}
+
+        if res['response']['status'] == 'success':
+            cache_out['status'] = 'ok'
+        else:
+            cache_out['status'] = 'error'
+            cache_out['ip'] = res['request']['ip']
+
+        return cache_out
 
 
 async def main():
     """
-    Read printer ip's from database and use printer info snatcher to get the data. After getting the data push it
+    Read printer ips from database and use printer info snatcher to get the data. After getting the data push it
     into redis
     """
-    mongo_uri = getenv("MONGODB_URI")
-    redis_uri = getenv("REDIS_URI")
     snatcher_uri = getenv("SNATCHER_URI")
-    mongo_client = MongoClient(mongo_uri, server_api=ServerApi('1'))
+    redis_uri_parsed = urlparse(getenv("REDIS_URI"))
 
+    mongo_client = MongoClient(getenv("MONGODB_URI"), server_api=ServerApi('1'))
+    redis_client = redis.Redis(host=redis_uri_parsed.hostname, port=redis_uri_parsed.port)
+
+    # check if services are online
     try:
         mongo_client.admin.command('ping')
-    except Exception as e:
-        exit(e)
+        redis_client.ping()
+        urllib.request.urlopen(getenv("SNATCHER_URI"))
+
+    except URLError:
+        exit("Cannot connect to snatcher")
+
+    except pymongo.errors.ConnectionFailure:
+        exit("Cannot connect to MongoDB")
+
+    except redis.exceptions.ConnectionError:
+        exit("Cannot connect to redis")
 
     collection = mongo_client["printer-status"]["printers"]
 
