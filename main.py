@@ -7,7 +7,7 @@ import urllib.request
 from dotenv import load_dotenv
 from sys import exit
 from os import getenv
-from enum import IntFlag
+from enum import Flag
 import aiohttp
 import asyncio
 import redis
@@ -15,10 +15,10 @@ import json
 
 load_dotenv()
 
-
-class FLAGS(IntFlag):
-    state = 1
-    count = 1
+STATE = {
+    "running": False,
+    "refresh_interval": 60
+}
 
 
 async def get_status(session, url):
@@ -64,9 +64,9 @@ async def main():
         except redis.exceptions.ConnectionError:
             exit("Cannot connect to Redis")
 
-        collection = mongo_client["printer-status"]["printers"]
+        printer_collection = mongo_client["printer-status"]["printers"]
 
-        printers = collection.find()
+        printers = printer_collection.find()
         printer_ip_list = [p['ip'] for p in printers]
 
         try:
@@ -84,14 +84,17 @@ async def main():
     def update_state():
         """
         Update Flags from database
-
         """
-        pass
+        settings_collection = mongo_client["settings"]["printer-status"]
+        settings = settings_collection.find({"properties": True})
+        STATE['running'] = settings[0]['running']
+        STATE['refresh_interval'] = settings[0]['refresh_interval']
+        print(f"Running: {STATE['running']}, Refresh Interval: {STATE['refresh_interval']}")
 
     while True:
         update_state()
         await asyncio.sleep(10)
-        if FLAGS.state:
+        if STATE['running']:
             await update_data()
 
 
