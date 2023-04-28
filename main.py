@@ -7,12 +7,18 @@ import urllib.request
 from dotenv import load_dotenv
 from sys import exit
 from os import getenv
+from enum import IntFlag
 import aiohttp
 import asyncio
 import redis
 import json
 
 load_dotenv()
+
+
+class FLAGS(IntFlag):
+    state = 1
+    count = 1
 
 
 async def get_status(session, url):
@@ -22,16 +28,12 @@ async def get_status(session, url):
     :param url: query url
     :return: None
     """
-    async with session.get(url, timeout=7000) as resp:
+    async with session.get(url, timeout=9000) as resp:
         res = json.loads(await resp.text())
-        cache_out = {'response': res['response']['message']}
-
-        if res['response']['status'] == 'success':
-            cache_out['status'] = 'ok'
-        else:
-            cache_out['status'] = 'error'
-            cache_out['ip'] = res['request']['ip']
-
+        cache_out = {'response': res['response']['message'],
+                     'printer_ip': res['request']['ip'],
+                     'request_status': 'ok' if res['response']['status'] == 'success' else 'error'
+                     }
         return cache_out
 
 
@@ -46,34 +48,51 @@ async def main():
     mongo_client = MongoClient(getenv("MONGODB_URI"), server_api=ServerApi('1'))
     redis_client = redis.Redis(host=redis_uri_parsed.hostname, port=redis_uri_parsed.port)
 
-    # check if services are online
-    try:
-        mongo_client.admin.command('ping')
-        redis_client.ping()
-        urllib.request.urlopen(getenv("SNATCHER_URI"))
+    # check if services are online, else throw an error
+    async def update_data():
+        try:
+            mongo_client.admin.command('ping')
+            redis_client.ping()
+            urllib.request.urlopen(getenv("SNATCHER_URI"))
 
-    except URLError:
-        exit("Cannot connect to snatcher")
+        except URLError:
+            exit("Cannot connect to Snatcher")
 
-    except pymongo.errors.ConnectionFailure:
-        exit("Cannot connect to MongoDB")
+        except pymongo.errors.ConnectionFailure:
+            exit("Cannot connect to MongoDB")
 
-    except redis.exceptions.ConnectionError:
-        exit("Cannot connect to redis")
+        except redis.exceptions.ConnectionError:
+            exit("Cannot connect to Redis")
 
-    collection = mongo_client["printer-status"]["printers"]
+        collection = mongo_client["printer-status"]["printers"]
 
-    printers = collection.find()
-    printer_ip_list = [p['ip'] for p in printers]
+        printers = collection.find()
+        printer_ip_list = [p['ip'] for p in printers]
 
-    async with aiohttp.ClientSession() as session:
-        tasks = []
-        for ip in printer_ip_list:
-            url = f'{snatcher_uri}?ip={ip}'
-            tasks.append(asyncio.ensure_future(get_status(session, url)))
-        done = await asyncio.gather(*tasks)
-        for wo in done:
-            print(wo)
+        try:
+            async with aiohttp.ClientSession() as session:
+                tasks = []
+                for ip in printer_ip_list:
+                    url = f'{snatcher_uri}?ip={ip}'
+                    tasks.append(asyncio.ensure_future(get_status(session, url)))
+                done = await asyncio.gather(*tasks)
+                for wo in done:
+                    print(wo)
+        except aiohttp.ServerDisconnectedError:
+            await asyncio.sleep(10)
+
+    def update_state():
+        """
+        Update Flags from database
+
+        """
+        pass
+
+    while True:
+        update_state()
+        await asyncio.sleep(10)
+        if FLAGS.state:
+            await update_data()
 
 
 if __name__ == '__main__':
