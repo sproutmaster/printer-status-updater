@@ -7,7 +7,6 @@ import urllib.request
 from dotenv import load_dotenv
 from sys import exit
 from os import getenv
-from enum import Flag
 import aiohttp
 import asyncio
 import redis
