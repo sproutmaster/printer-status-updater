@@ -1,0 +1,38 @@
+name: Docker Hub CI
+on:
+  push:
+    branches: 
+      - master
+  pull_request:
+    branches: 
+      - master
+      - staging/*
+      
+jobs:
+  docker-image-push:
+    name: build & push image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Load .env file
+        uses: xom9ikk/dotenv@v2
+        with:
+          path: ./
+          mode: ver
+          load-mode: strict
+
+      - name: Docker build & publish
+        uses: bitovi/github-actions-docker-publish@v1.0.7
+        with:
+          checkout: false
+          image_tag: ${{ env.VER }}
+          use_sha: false
+          org_name: ${{ secrets.DOCKERHUB_ORG }}
+          repo_name: printer-status-updater
+          use_latest: true
+          docker_username:  ${{ secrets.DOCKERHUB_USER }}
+          docker_password: ${{ secrets.DOCKERHUB_PSW }}
+          working-directory: ./
