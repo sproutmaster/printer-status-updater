@@ -23,7 +23,7 @@ STATE = {
 }
 
 
-async def get_status(session: aiohttp.ClientSession, url: str) -> dict:
+async def get_status(session: aiohttp.ClientSession, url: str) -> dict | None:
     """
     If printer is online,
     :param session: session
@@ -39,7 +39,7 @@ async def get_status(session: aiohttp.ClientSession, url: str) -> dict:
                     }
 
     except:
-        return
+        return None
 
 
 async def main():
