@@ -1,3 +1,5 @@
+import sys
+
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 import pymongo.errors
@@ -16,29 +18,33 @@ load_dotenv()
 
 STATE = {
     "running": False,
-    "refresh_interval": 60
+    "refresh_interval": 60,
+    "session_timeout": 9000
 }
 
 
-async def get_status(session, url):
+async def get_status(session: aiohttp.ClientSession, url: str) -> dict:
     """
     If printer is online,
     :param session: session
     :param url: query url
-    :return: None
+    :return: response
     """
-    async with session.get(url, timeout=9000) as resp:
-        res = json.loads(await resp.text())
-        cache_out = {'response': res['response']['message'],
-                     'printer_ip': res['request']['ip'],
-                     'request_status': 'ok' if res['response']['status'] == 'success' else 'error'
-                     }
-        return cache_out
+    try:
+        async with session.get(url, timeout=STATE['session_timeout']) as resp:
+            res = json.loads(await resp.text())
+            return {'response': res['response']['message'],
+                    'printer_ip': res['request']['ip'],
+                    'request_status': 'ok' if res['response']['status'] == 'success' else 'error'
+                    }
+
+    except:
+        return
 
 
 async def main():
     """
-    Read printer ips from database and use printer info snatcher to get the data. After getting the data push it
+    Read printer IPs from database and use printer info snatcher to get the data. After getting the data push it
     into redis
     """
     snatcher_uri = getenv("SNATCHER_URI")
@@ -48,25 +54,30 @@ async def main():
     redis_client = redis.Redis(host=redis_uri_parsed.hostname, port=redis_uri_parsed.port)
 
     # check if services are online, else throw an error
-    async def update_data():
+    async def update_data() -> None:
+        """
+        Get all IP addresses from database and add to task queue. After getting the data, push it into redis
+        :return: None
+        """
         try:
-            mongo_client.admin.command('ping')
-            redis_client.ping()
             urllib.request.urlopen(getenv("SNATCHER_URI"))
+            redis_client.ping()
+
+            printer_collection = mongo_client["printer-status"]["printers"]
+            printers = printer_collection.find()
+            printer_ip_list = [p['ip'] for p in printers]
 
         except URLError:
-            exit("Cannot connect to Snatcher")
+            print("Cannot connect to Snatcher")
+            return
 
         except pymongo.errors.ConnectionFailure:
-            exit("Cannot connect to MongoDB")
+            print("Cannot connect to MongoDB")
+            return
 
         except redis.exceptions.ConnectionError:
-            exit("Cannot connect to Redis")
-
-        printer_collection = mongo_client["printer-status"]["printers"]
-
-        printers = printer_collection.find()
-        printer_ip_list = [p['ip'] for p in printers]
+            print("Cannot connect to Redis")
+            return
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -74,29 +85,39 @@ async def main():
                 for ip in printer_ip_list:
                     url = f'{snatcher_uri}?ip={ip}'
                     tasks.append(asyncio.ensure_future(get_status(session, url)))
-                done = await asyncio.gather(*tasks)
-                for wo in done:
-                    print(wo)
+                result = await asyncio.gather(*tasks)
+
+                if None not in result:
+                    redis_client.set('printer_data', json.dumps(result))
+                    print(f"{len(result)} objects pushed to redis")
+
         except aiohttp.ServerDisconnectedError:
-            await asyncio.sleep(10)
+            return
 
     def update_state():
         """
-        Update Flags from database
+        Update state settings from database
         """
         settings_collection = mongo_client["settings"]["printer-status"]
         settings = settings_collection.find({"properties": True})
         STATE['running'] = settings[0]['running']
         STATE['refresh_interval'] = settings[0]['refresh_interval']
-        print(f"Running: {STATE['running']}, Refresh Interval: {STATE['refresh_interval']}")
+        print(f"Is Running: {STATE['running']}, Sleeping for: {STATE['refresh_interval']} sec")
 
+    # execution starts from here
+    """
+    Update state settings from database. If running state is true, update data and sleep for refresh interval
+    """
     while True:
         update_state()
-        await asyncio.sleep(10)
         if STATE['running']:
             await update_data()
+        await asyncio.sleep(STATE['refresh_interval'])
 
 
 if __name__ == '__main__':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(main())
+    if sys.platform == 'linux':
+        asyncio.run(main())
+    elif sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        asyncio.run(main())
