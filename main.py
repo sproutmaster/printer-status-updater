@@ -77,6 +77,8 @@ async def main():
             print("Cannot connect to Redis")
             return
 
+        redis_client.set('running', str(STATE['running']))
+
         try:
             async with aiohttp.ClientSession() as session:
                 tasks = []
@@ -100,7 +102,6 @@ async def main():
         settings = settings_collection.find({"properties": True})
         STATE['running'] = settings[0]['running']
         STATE['refresh_interval'] = settings[0]['refresh_interval']
-        redis_client.set('running', str(STATE['running']))
         print(f"Running: {STATE['running']}, Sleeping for: {STATE['refresh_interval']} sec")
 
     # XXX: execution starts from here
