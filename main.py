@@ -1,5 +1,3 @@
-import sys
-
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 import pymongo.errors
@@ -7,12 +5,12 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 import urllib.request
 from dotenv import load_dotenv
-from sys import exit
 from os import getenv
 import aiohttp
 import asyncio
 import redis
 import json
+import sys
 
 load_dotenv()
 
@@ -25,7 +23,7 @@ STATE = {
 
 async def get_status(session: aiohttp.ClientSession, url: str) -> dict | None:
     """
-    If printer is online,
+    Gets printer status from snatcher
     :param session: session
     :param url: query url
     :return: response
@@ -39,7 +37,7 @@ async def get_status(session: aiohttp.ClientSession, url: str) -> dict | None:
                     }
 
     except:
-        return None
+        return
 
 
 async def main():
@@ -56,9 +54,9 @@ async def main():
     # check if services are online, else throw an error
     async def update_data() -> None:
         """
-        Get all IP addresses from database and add to task queue. After getting the data, push it into redis
-        :return: None
+        Get all IP addresses from database and add data fetch task to queue. After getting the data, push it into redis
         """
+
         try:
             urllib.request.urlopen(getenv("SNATCHER_URI"))
             redis_client.ping()
@@ -102,9 +100,10 @@ async def main():
         settings = settings_collection.find({"properties": True})
         STATE['running'] = settings[0]['running']
         STATE['refresh_interval'] = settings[0]['refresh_interval']
-        print(f"Is Running: {STATE['running']}, Sleeping for: {STATE['refresh_interval']} sec")
+        redis_client.set('running', str(STATE['running']))
+        print(f"Running: {STATE['running']}, Sleeping for: {STATE['refresh_interval']} sec")
 
-    # execution starts from here
+    # XXX: execution starts from here
     """
     Update state settings from database. If running state is true, update data and sleep for refresh interval
     """
